@@ -1,0 +1,28 @@
+[package]
+name = "devkit"
+version = "1.0.0"
+edition = "2021"
+authors = ["DevKit Tools"]
+description = "Blazing fast offline developer utilities - Base64, UUID, Hash, JSON, Timestamps"
+license = "MIT"
+repository = "https://github.com/ruvnet/devkit"
+keywords = ["cli", "developer-tools", "base64", "uuid", "json"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+clap = { version = "4.4", features = ["derive", "color"] }
+base64 = "0.21"
+uuid = { version = "1.6", features = ["v4", "v7"] }
+sha2 = "0.10"
+md-5 = "0.10"
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+colored = "2.1"
+anyhow = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
