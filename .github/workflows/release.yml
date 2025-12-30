@@ -9,33 +9,9 @@ permissions:
   contents: write
 
 jobs:
-  build-and-upload:
-    name: Build and upload
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            name: linux-x86_64
-            ext: ''
-            archive: tar.gz
-          - os: ubuntu-latest
-            target: x86_64-pc-windows-gnu
-            name: windows-x86_64
-            ext: .exe
-            archive: zip
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            name: macos-intel
-            ext: ''
-            archive: tar.gz
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            name: macos-arm64
-            ext: ''
-            archive: tar.gz
-
+  build-linux:
+    name: Build Linux & Windows
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -43,32 +19,117 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          target: ${{ matrix.target }}
           override: true
 
-      - name: Install mingw-w64 (Windows)
-        if: matrix.target == 'x86_64-pc-windows-gnu'
+      - name: Add targets
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Install mingw-w64
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build Linux
+        run: cargo build --release --target x86_64-unknown-linux-gnu
 
-      - name: Package binary
+      - name: Build Windows
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Package Linux
         run: |
-          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-            tar -czf devkit-${{ github.ref_name }}-${{ matrix.name }}.tar.gz -C target/${{ matrix.target }}/release devkit${{ matrix.ext }}
-            echo "ASSET_PATH=devkit-${{ github.ref_name }}-${{ matrix.name }}.tar.gz" >> $GITHUB_ENV
-          else
-            cd target/${{ matrix.target }}/release
-            zip ../../../devkit-${{ github.ref_name }}-${{ matrix.name }}.zip devkit${{ matrix.ext }}
-            cd ../../..
-            echo "ASSET_PATH=devkit-${{ github.ref_name }}-${{ matrix.name }}.zip" >> $GITHUB_ENV
-          fi
+          tar -czf devkit-${{ github.ref_name }}-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release devkit
 
-      - name: Upload Release Asset
+      - name: Package Windows
+        run: |
+          cd target/x86_64-pc-windows-gnu/release
+          zip ../../../devkit-${{ github.ref_name }}-windows-x86_64.zip devkit.exe
+          cd ../../..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-windows-binaries
+          path: |
+            devkit-${{ github.ref_name }}-linux-x86_64.tar.gz
+            devkit-${{ github.ref_name }}-windows-x86_64.zip
+
+  build-macos-intel:
+    name: Build macOS Intel
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Build macOS Intel
+        run: cargo build --release
+
+      - name: Package macOS Intel
+        run: |
+          tar -czf devkit-${{ github.ref_name }}-macos-x86_64.tar.gz -C target/release devkit
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-intel-binary
+          path: devkit-${{ github.ref_name }}-macos-x86_64.tar.gz
+
+  build-macos-arm:
+    name: Build macOS ARM64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Build macOS ARM64
+        run: cargo build --release
+
+      - name: Package macOS ARM64
+        run: |
+          tar -czf devkit-${{ github.ref_name }}-macos-aarch64.tar.gz -C target/release devkit
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-arm-binary
+          path: devkit-${{ github.ref_name }}-macos-aarch64.tar.gz
+
+  release:
+    name: Create Release
+    needs: [build-linux, build-macos-intel, build-macos-arm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Display structure
+        run: ls -R
+
+      - name: Move artifacts to root
+        run: |
+          mv linux-windows-binaries/* .
+          mv macos-intel-binary/* .
+          mv macos-arm-binary/* .
+
+      - name: Generate checksums
+        run: |
+          sha256sum devkit-${{ github.ref_name }}-*.tar.gz devkit-${{ github.ref_name }}-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.ASSET_PATH }}
           tag_name: ${{ github.ref_name }}
           name: DevKit ${{ github.ref_name }} - Blazing Fast Offline Dev Tools
           body: |
@@ -85,7 +146,11 @@ jobs:
             - 🔗 URL encoding/decoding
 
             ### 📦 Downloads
-            Choose your platform below and download the binary.
+            Choose your platform below:
+            - **Linux x86_64:** `devkit-${{ github.ref_name }}-linux-x86_64.tar.gz`
+            - **Windows x86_64:** `devkit-${{ github.ref_name }}-windows-x86_64.zip`
+            - **macOS Intel:** `devkit-${{ github.ref_name }}-macos-x86_64.tar.gz`
+            - **macOS ARM64 (M1/M2/M3):** `devkit-${{ github.ref_name }}-macos-aarch64.tar.gz`
 
             ### 🚀 Quick Start
             ```bash
@@ -93,6 +158,9 @@ jobs:
             tar -xzf devkit-*.tar.gz
             chmod +x devkit
             sudo mv devkit /usr/local/bin/
+
+            # Windows
+            # Extract ZIP, add to PATH
 
             # Verify
             devkit --version
@@ -114,5 +182,11 @@ jobs:
             **Full documentation:** [README.md](https://github.com/bobinzuks/devkit#readme)
           draft: false
           prerelease: false
+          files: |
+            devkit-${{ github.ref_name }}-linux-x86_64.tar.gz
+            devkit-${{ github.ref_name }}-windows-x86_64.zip
+            devkit-${{ github.ref_name }}-macos-x86_64.tar.gz
+            devkit-${{ github.ref_name }}-macos-aarch64.tar.gz
+            SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
